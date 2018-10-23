@@ -12,6 +12,7 @@ ENV OAUTH_CLIENT_SECRET "**None**"
 ENV OAUTH_REALM "**None**"
 ENV OAUTH_APP_NAME "**None**"
 ENV OAUTH_ADDITIONAL_PARAMS "**None**"
+ENV OAUTH2_REDIRECT_URL "http://localhost:3200/oauth2-redirect.html"
 ENV SWAGGER_JSON "/app/swagger.json"
 ENV PORT 8080
 ENV BASE_URL ""
