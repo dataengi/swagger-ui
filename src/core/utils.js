@@ -1,3 +1,15 @@
+/* 
+  ATTENTION! This file (but not the functions within) is deprecated.
+
+  You should probably add a new file to `./helpers/` instead of adding a new
+  function here.
+
+  One-function-per-file is a better pattern than what we have here.
+
+  If you're refactoring something in here, feel free to break it out to a file
+  in `./helpers` if you have the time.
+*/
+
 import Im from "immutable"
 import { sanitizeUrl as braintreeSanitizeUrl } from "@braintree/sanitize-url"
 import camelCase from "lodash/camelCase"
@@ -9,6 +21,7 @@ import eq from "lodash/eq"
 import { memoizedSampleFromSchema, memoizedCreateXMLExample } from "core/plugins/samples/fn"
 import win from "./window"
 import cssEscape from "css.escape"
+import getParameterSchema from "../helpers/get-parameter-schema"
 
 const DEFAULT_RESPONSE_KEY = "default"
 
@@ -484,12 +497,12 @@ export const validatePattern = (val, rxPattern) => {
 }
 
 // validation of parameters before execute
-export const validateParam = (param, isXml, isOAS3 = false) => {
+export const validateParam = (param, value, { isOAS3 = false, bypassRequiredCheck = false } = {}) => {
+  
   let errors = []
-  let value = isXml && param.get("in") === "body" ? param.get("value_xml") : param.get("value")
   let required = param.get("required")
 
-  let paramDetails = isOAS3 ? param.get("schema") : param
+  let paramDetails = getParameterSchema(param, { isOAS3 })
 
   if(!paramDetails) return errors
 
@@ -501,7 +514,6 @@ export const validateParam = (param, isXml, isOAS3 = false) => {
   let minLength = paramDetails.get("minLength")
   let pattern = paramDetails.get("pattern")
 
-
   /*
     If the parameter is required OR the parameter has a value (meaning optional, but filled in)
     then we should do our validation routine.
@@ -511,36 +523,34 @@ export const validateParam = (param, isXml, isOAS3 = false) => {
     // These checks should evaluate to true if there is a parameter
     let stringCheck = type === "string" && value
     let arrayCheck = type === "array" && Array.isArray(value) && value.length
-    let listCheck = type === "array" && Im.List.isList(value) && value.count()
+    let arrayListCheck = type === "array" && Im.List.isList(value) && value.count()
+    let arrayStringCheck = type === "array" && typeof value === "string" && value
     let fileCheck = type === "file" && value instanceof win.File
     let booleanCheck = type === "boolean" && (value || value === false)
     let numberCheck = type === "number" && (value || value === 0)
     let integerCheck = type === "integer" && (value || value === 0)
+    let objectCheck = type === "object" && typeof value === "object" && value !== null
+    let objectStringCheck = type === "object" && typeof value === "string" && value
 
-    let oas3ObjectCheck = false
-
-    if(false || isOAS3 && type === "object") {
-      if(typeof value === "object") {
-        oas3ObjectCheck = true
-      } else if(typeof value === "string") {
-        try {
-          JSON.parse(value)
-          oas3ObjectCheck = true
-        } catch(e) {
-          errors.push("Parameter string value must be valid JSON")
-          return errors
-        }
-      }
-    }
+    // if(type === "object" && typeof value === "string") {
+    //   // Disabled because `validateParam` doesn't consider the MediaType of the 
+    //   // `Parameter.content` hint correctly.
+    //   try {
+    //     JSON.parse(value)
+    //   } catch(e) {
+    //     errors.push("Parameter string value must be valid JSON")
+    //     return errors
+    //   }
+    // }
 
     const allChecks = [
-      stringCheck, arrayCheck, listCheck, fileCheck, booleanCheck,
-      numberCheck, integerCheck, oas3ObjectCheck
+      stringCheck, arrayCheck, arrayListCheck, arrayStringCheck, fileCheck, 
+      booleanCheck, numberCheck, integerCheck, objectCheck, objectStringCheck,
     ]
 
     const passedAnyCheck = allChecks.some(v => !!v)
 
-    if ( required && !passedAnyCheck ) {
+    if (required && !passedAnyCheck && !bypassRequiredCheck ) {
       errors.push("Required field is not provided")
       return errors
     }
@@ -596,7 +606,7 @@ export const validateParam = (param, isXml, isOAS3 = false) => {
     } else if ( type === "array" ) {
       let itemType
 
-      if ( !listCheck || !value.count() ) { return errors }
+      if ( !arrayListCheck || !value.count() ) { return errors }
 
       itemType = paramDetails.getIn(["items", "type"])
 
@@ -634,7 +644,7 @@ export const getSampleSchema = (schema, contentType="", config={}) => {
         let match = schema.$$ref.match(/\S*\/(\S+)$/)
         schema.xml.name = match[1]
       } else if (schema.type || schema.items || schema.properties || schema.additionalProperties) {
-        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- XML example cannot be generated -->"
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- XML example cannot be generated; root element name is undefined -->"
       } else {
         return null
       }
@@ -782,7 +792,7 @@ export function stringify(thing) {
     return thing
   }
 
-  if (thing.toJS) {
+  if (thing && thing.toJS) {
     thing = thing.toJS()
   }
 
@@ -795,6 +805,10 @@ export function stringify(thing) {
     }
   }
 
+  if(thing === null || thing === undefined) {
+    return ""
+  }
+
   return thing.toString()
 }
 
@@ -804,4 +818,44 @@ export function numberToString(thing) {
   }
 
   return thing
+}
+
+export function paramToIdentifier(param, { returnAll = false, allowHashes = true } = {}) {
+  if(!Im.Map.isMap(param)) {
+    throw new Error("paramToIdentifier: received a non-Im.Map parameter as input")
+  }
+  const paramName = param.get("name")
+  const paramIn = param.get("in")
+  
+  let generatedIdentifiers = []
+
+  // Generate identifiers in order of most to least specificity
+
+  if (param && param.hashCode && paramIn && paramName && allowHashes) {
+    generatedIdentifiers.push(`${paramIn}.${paramName}.hash-${param.hashCode()}`)
+  }
+  
+  if(paramIn && paramName) {
+    generatedIdentifiers.push(`${paramIn}.${paramName}`)
+  }
+
+  generatedIdentifiers.push(paramName)
+
+  // Return the most preferred identifier, or all if requested
+
+  return returnAll ? generatedIdentifiers : (generatedIdentifiers[0] || "")
+}
+
+export function paramToValue(param, paramValues) {
+  const allIdentifiers = paramToIdentifier(param, { returnAll: true })
+
+  // Map identifiers to values in the provided value hash, filter undefined values,
+  // and return the first value found
+  const values = allIdentifiers
+    .map(id => {
+      return paramValues[id]
+    })
+    .filter(value => value !== undefined)
+
+  return values[0]
 }
